@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Orkestrasi Multi-AI Agent System</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        html, body { height: 100%; width: 100%; background-color: #0f172a; color: #f8fafc; overflow: hidden; }
+        .app-container { display: flex; flex-direction: column; height: 100%; max-width: 650px; margin: 0 auto; position: relative; }
+        header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #334155; background-color: #0f172a; flex-shrink: 0; gap: 8px; z-index: 10; }
+        .title { font-size: 1.1rem; font-weight: 700; color: #38bdf8; letter-spacing: 0.5px; }
+        .active-mode-badge { background-color: #1e293b; color: #38bdf8; border: 1px solid #38bdf8; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+        .status-badge { padding: 6px 14px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+        .status-offline { background-color: #ef4444; color: #ffffff; }
+        .status-online { background-color: #10b981; color: #ffffff; }
+        .status-thinking { background-color: #f59e0b; color: #ffffff; }
+        #chat-container { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 16px; padding-bottom: 90px; scroll-behavior: smooth; }
+        .message { max-width: 85%; padding: 14px 18px; border-radius: 20px; line-height: 1.6; font-size: 0.95rem; word-wrap: break-word; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .user-message { align-self: flex-end; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #ffffff; border-bottom-right-radius: 4px; }
+        .arvi-message { align-self: flex-start; background-color: #1e293b; color: #f1f5f9; border: 1px solid #334155; border-bottom-left-radius: 4px; }
+        .analysis-card { margin-top: 10px; padding: 10px; background: rgba(15, 23, 42, 0.8); border-radius: 8px; border-left: 3px solid #38bdf8; font-size: 0.82rem; color: #cbd5e1; }
+        .analysis-tag { display: inline-block; background: #334155; color: #38bdf8; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; margin: 2px; }
+        .input-box { position: fixed; bottom: 0; left: 0; right: 0; max-width: 650px; margin: 0 auto; padding: 10px 14px; background-color: #0f172a; border-top: 1px solid #334155; z-index: 1000; }
+        .input-wrapper { display: flex; gap: 10px; align-items: flex-end; background-color: #1e293b; padding: 8px 14px; border-radius: 24px; border: 1px solid #334155; }
+        textarea { flex: 1; padding: 6px 4px; border: none; background-color: transparent; color: #f8fafc; outline: none; resize: none; font-size: 0.95rem; max-height: 100px; min-height: 24px; }
+        button { padding: 0 18px; height: 40px; background-color: #0284c7; color: white; border: none; border-radius: 20px; font-weight: 600; font-size: 0.9rem; cursor: pointer; }
+        button:disabled { background-color: #334155; color: #64748b; cursor: not-allowed; }
+        .mic-btn { min-width: 40px; height: 40px; padding: 0; border-radius: 50%; background-color: #334155; font-size: 1.1rem; }
+        .mic-btn.listening { background-color: #ef4444; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        .message { animation: fadeIn 0.2s ease-in-out; }
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        <header>
+            <div class="title">ARVI Debate AI</div>
+            <div id="mode-badge" class="active-mode-badge">😊 Santun</div>
+            <div id="status" class="status-badge status-offline">Connecting...</div>
+        </header>
+
+        <div id="chat-container">
+            <div class="message arvi-message">
+                Halo! Saya ARVI. Mari kita mulai berdiskusi secara interaktif dengan 7 mode kepribadian otomatis.
+            </div>
+        </div>
+
+        <div class="input-box" id="input-box">
+            <div class="input-wrapper">
+                <button id="mic-btn" class="mic-btn" title="Tekan untuk bicara" disabled>🎤</button>
+                <textarea id="user-input" rows="1" placeholder="Tulis argumen kamu di sini..." disabled></textarea>
+                <button id="send-btn" disabled>Kirim</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+        const chatContainer = document.getElementById('chat-container');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const micBtn = document.getElementById('mic-btn');
+        const modeBadge = document.getElementById('mode-badge');
+        const inputBox = document.getElementById('input-box');
+
+        let ws;
+        let pingInterval;
+        let reconnectAttempts = 0;
+        let isListening = false;
+        let recognition = null;
+        let turnCount = 0;
+        let lastArviElement = null;
+
+        // === 7 Mode Auto-Detection ===
+        function detect7ModesAutomatically(text) {
+            const lower = text.toLowerCase();
+            turnCount++;
+
+            if (lower.includes('skor') || lower.includes('evaluasi') || lower.includes('penilaian') || lower.includes('judge')) {
+                modeBadge.textContent = '🎯 Judge Mode';
+                return 'judge';
+            }
+            if (lower.includes('data') || lower.includes('riset') || lower.includes('jurnal') || lower.includes('bukti') || lower.includes('statistik')) {
+                modeBadge.textContent = '📊 Deep Researcher';
+                return 'deep_researcher';
+            }
+            if (lower.includes('tukar posisi') || lower.includes('pindah tim') || turnCount % 4 === 0) {
+                modeBadge.textContent = '🔄 Switch Side';
+                return 'switch_side';
+            }
+            if (text.includes('?') && (lower.startsWith('kenapa') || lower.startsWith('bagaimana') || lower.startsWith('mengapa'))) {
+                modeBadge.textContent = '🤔 Sokrates';
+                return 'sokrates';
+            }
+            if (lower.includes('salah') || lower.includes('hancur') || lower.includes('kalah') || text.includes('!')) {
+                modeBadge.textContent = '😤 Agresif';
+                return 'agresif';
+            }
+            if (lower.includes('tapi') || lower.includes('kontra') || lower.includes('bisa jadi') || lower.includes('opini')) {
+                modeBadge.textContent = "😈 Devil's Advocate";
+                return 'devils_advocate';
+            }
+
+            modeBadge.textContent = '😊 Santun';
+            return 'santun';
+        }
+
+        // === Speech-to-Text ===
+        function initSpeechToText() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) { micBtn.style.display = 'none'; return; }
+
+            recognition = new SpeechRecognition();
+            recognition.lang = 'id-ID';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onresult = (event) => {
+                userInput.value = event.results[0][0].transcript;
+                autoResizeInput();
+                stopListening();
+                sendMessage();
+            };
+            recognition.onerror = () => stopListening();
+            recognition.onend = () => stopListening();
+        }
+
+        function startListening() {
+            if (!recognition || isListening) return;
+            try {
+                recognition.start();
+                isListening = true;
+                micBtn.textContent = '🔴';
+                micBtn.classList.add('listening');
+                userInput.placeholder = "Mendengarkan...";
+            } catch (e) { stopListening(); }
+        }
+
+        function stopListening() {
+            isListening = false;
+            micBtn.textContent = '🎤';
+            micBtn.classList.remove('listening');
+            userInput.placeholder = "Tulis argumen kamu di sini...";
+            if (recognition) { try { recognition.stop(); } catch (e) {} }
+        }
+
+        micBtn.addEventListener('click', () => {
+            if (isListening) stopListening();
+            else startListening();
+        });
+
+        // === Text-to-Speech ===
+        function speakText(text) {
+            if (!window.speechSynthesis) return;
+            const cleanText = text.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(cleanText);
+            utterance.lang = 'id-ID';
+            window.speechSynthesis.speak(utterance);
+        }
+
+        // === WebSocket — nyambung ke backend server ===
+        // Ganti ARVI_WS_URL kalo backend pindah alamat
+        const ARVI_WS_URL = 'wss://arvi.serveousercontent.com/ws/debate';
+        function connectWebSocket() {
+            const wsUrl = ARVI_WS_URL;
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                statusEl.textContent = "Online";
+                statusEl.className = "status-badge status-online";
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                micBtn.disabled = false;
+                reconnectAttempts = 0;
+
+                clearInterval(pingInterval);
+                pingInterval = setInterval(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: "ping" }));
+                    }
+                }, 20000);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === "pong") return;
+
+                    if (data.type === "thinking") {
+                        statusEl.textContent = "Berpikir...";
+                        statusEl.className = "status-badge status-thinking";
+                    } else if (data.type === "response") {
+                        statusEl.textContent = "Online";
+                        statusEl.className = "status-badge status-online";
+                        appendArviMessage(data.message);
+                        speakText(data.message);
+                    } else if (data.type === "evaluation") {
+                        appendEvaluationCard(data.evaluator_data);
+                    }
+                } catch(e) {
+                    console.error("Error parsing message:", e);
+                }
+            };
+
+            ws.onclose = () => {
+                clearInterval(pingInterval);
+                statusEl.textContent = "Offline";
+                statusEl.className = "status-badge status-offline";
+                userInput.disabled = true;
+                sendBtn.disabled = true;
+                micBtn.disabled = true;
+
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                reconnectAttempts++;
+                if (reconnectAttempts <= 5) {
+                    setTimeout(connectWebSocket, delay);
+                }
+            };
+
+            ws.onerror = () => ws.close();
+        }
+
+        // === Kirim Pesan ===
+        function sendMessage() {
+            const text = userInput.value.trim();
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            appendUserMessage(text);
+            const detectedMode = detect7ModesAutomatically(text);
+
+            ws.send(JSON.stringify({
+                type: "argument",
+                text: text,
+                user_id: "zidan",
+                mode: detectedMode
+            }));
+
+            userInput.value = "";
+            userInput.style.height = 'auto';
+        }
+
+        function appendUserMessage(text) {
+            const msg = document.createElement('div');
+            msg.className = 'message user-message';
+            msg.textContent = text;
+            chatContainer.appendChild(msg);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function appendArviMessage(text) {
+            const msg = document.createElement('div');
+            msg.className = 'message arvi-message';
+            msg.innerHTML = `<div>${(text || '').replace(/\n/g, '<br>')}</div>`;
+            chatContainer.appendChild(msg);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            lastArviElement = msg;
+        }
+
+        function appendEvaluationCard(data) {
+            if (!lastArviElement) return;
+
+            const fallaciesText = Array.isArray(data.fallacies) && data.fallacies.length > 0
+                ? data.fallacies.map(f => `<span class="analysis-tag">${escapeHtml(f)}</span>`).join(' ')
+                : 'Tidak Ada';
+
+            const evidenceText = Array.isArray(data.evidence) && data.evidence.length > 0
+                ? '<br>' + data.evidence.map(e => `• ${escapeHtml(e)}`).join('<br>')
+                : '';
+
+            const card = document.createElement('div');
+            card.className = 'analysis-card';
+            card.innerHTML = `
+                <strong>📊 Skor Logika:</strong> ${data.score || 0}/100<br>
+                <strong>⚠️ Cacat Logika:</strong> ${fallaciesText}<br>
+                <strong>💡 Masukan Pelatih:</strong> ${data.coach_feedback || '-'}
+                ${evidenceText ? '<br><strong>📚 Bukti/Fakta:</strong>' + evidenceText : ''}
+            `;
+
+            lastArviElement.appendChild(card);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text).replace(/[&<>"']/g, function(m) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+            });
+        }
+
+        function autoResizeInput() {
+            userInput.style.height = 'auto';
+            userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        userInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        userInput.addEventListener('input', autoResizeInput);
+
+        initSpeechToText();
+        connectWebSocket();
+    </script>
+</body>
+</html>
